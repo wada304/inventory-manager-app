@@ -1066,6 +1066,7 @@ export default function InventoryManager() {
         <span>⚠️ 要発注 = 在庫日数 ≤ リードタイム + 安全在庫日数</span>
         <span>⚡ 注意 = 上記の1.3倍以内</span>
         <span>* データはブラウザに保存されます</span>
+        <span style={{ marginLeft: "auto", color: "#d1d5db" }}>v1.1.0</span>
       </div>
 
       {editProduct && (
