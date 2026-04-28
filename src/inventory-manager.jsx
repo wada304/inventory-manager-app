@@ -17,6 +17,8 @@ const DEFAULT_PRODUCTS = [
     mfgLeadDays: 45,
     shippingDays: 30,
     reorderPoint: 800,
+    bufferDays: 14,
+    stockUpdatedAt: null,
     unitCost: 2800,
     unitPrice: 8980,
     color: "#e8622a",
@@ -33,6 +35,8 @@ const DEFAULT_PRODUCTS = [
     mfgLeadDays: 45,
     shippingDays: 30,
     reorderPoint: 800,
+    bufferDays: 14,
+    stockUpdatedAt: null,
     unitCost: 3200,
     unitPrice: 10980,
     color: "#2a7ae8",
@@ -49,6 +53,8 @@ const DEFAULT_PRODUCTS = [
     mfgLeadDays: 60,
     shippingDays: 35,
     reorderPoint: 150,
+    bufferDays: 14,
+    stockUpdatedAt: null,
     unitCost: 6800,
     unitPrice: 24800,
     color: "#2ae87a",
@@ -97,6 +103,15 @@ function calcOrderDeadline(product) {
   const totalStock = getStock(product.stock);
   const lead = calcLeadDays(product);
   return Math.round(((totalStock - product.reorderPoint) / avg) * 30 - lead);
+}
+
+function getStockUpdateInfo(stockUpdatedAt, now) {
+  if (!stockUpdatedAt) return null;
+  const updated = new Date(stockUpdatedAt);
+  const diffDays = Math.floor((now - updated) / (1000 * 60 * 60 * 24));
+  const month = updated.getMonth() + 1;
+  const day = updated.getDate();
+  return { label: `${month}月${day}日`, needsUpdate: diffDays >= 7, diffDays };
 }
 
 const ALERT_CONFIG = {
@@ -205,6 +220,8 @@ function ProductModal({ product, onSave, onClose }) {
   const [form, setForm] = useState(() => ({
     asin: "",
     jan: "",
+    bufferDays: 14,
+    stockUpdatedAt: null,
     ...product,
     monthlySales: {
       Amazon: Array.isArray(product.monthlySales?.Amazon)
@@ -220,6 +237,13 @@ function ProductModal({ product, onSave, onClose }) {
   const set = (key, val) => setForm((f) => ({ ...f, [key]: val }));
   const setNested = (parent, key, val) =>
     setForm((f) => ({ ...f, [parent]: { ...f[parent], [key]: val } }));
+
+  const calcSafetyStock = () => {
+    const dailyAvg = totalAvgSales(form) / 30;
+    const lead = (form.mfgLeadDays || 0) + (form.shippingDays || 0);
+    const safety = Math.round(dailyAvg * (lead + (form.bufferDays || 0)));
+    set("reorderPoint", safety);
+  };
 
   return (
     <div
@@ -294,7 +318,7 @@ function ProductModal({ product, onSave, onClose }) {
           />
 
           <SectionLabel>在庫数</SectionLabel>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "12px" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: "12px" }}>
             <Field label="Amazon FBA">
               <input
                 type="number"
@@ -316,10 +340,18 @@ function ProductModal({ product, onSave, onClose }) {
                 onChange={(e) => setNested("stock", "楽天ロジ", Number(e.target.value))}
               />
             </Field>
+            <Field label="在庫更新日">
+              <input
+                type="date"
+                value={form.stockUpdatedAt || ""}
+                onChange={(e) => set("stockUpdatedAt", e.target.value || null)}
+                style={{ textAlign: "left" }}
+              />
+            </Field>
           </div>
 
           <SectionLabel>発注設定</SectionLabel>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "12px" }}>
             <Field label="発注ロット数">
               <input
                 type="number"
@@ -334,6 +366,37 @@ function ProductModal({ product, onSave, onClose }) {
                 onChange={(e) => set("reorderPoint", Number(e.target.value))}
               />
             </Field>
+            <Field label="予備日数（バッファ）">
+              <input
+                type="number"
+                min="0"
+                value={form.bufferDays}
+                onChange={(e) => set("bufferDays", Number(e.target.value))}
+              />
+            </Field>
+          </div>
+          <button
+            onClick={calcSafetyStock}
+            style={{
+              padding: "9px 18px",
+              background: "#eff6ff",
+              border: "1px solid #93c5fd",
+              borderRadius: "8px",
+              color: "#1d4ed8",
+              cursor: "pointer",
+              fontFamily: FONT,
+              fontSize: "13px",
+              fontWeight: "600",
+              alignSelf: "flex-start",
+            }}
+          >
+            ⚙️ 安全在庫を自動計算
+          </button>
+          <div style={{ fontSize: "11px", color: "#9ca3af", marginTop: "-8px" }}>
+            計算式：日次平均販売数 × (リードタイム + 予備日数)
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
             <Field label="製造リードタイム(日)">
               <input
                 type="number"
@@ -423,6 +486,7 @@ function Field({ label, children }) {
           width: "100%",
           outline: "none",
           boxSizing: "border-box",
+          ...children.props.style,
         },
       })}
     </label>
@@ -474,6 +538,8 @@ export default function InventoryManager() {
     mfgLeadDays: 45,
     shippingDays: 30,
     reorderPoint: 300,
+    bufferDays: 14,
+    stockUpdatedAt: null,
     unitCost: 0,
     unitPrice: 0,
     color: "#e8622a",
@@ -690,6 +756,7 @@ export default function InventoryManager() {
           const avgRak = Math.round(avgSales(product.monthlySales.楽天市場));
           const avgTotal = avgAmz + avgRak;
           const stockValue = totalStock * product.unitCost;
+          const updateInfo = getStockUpdateInfo(product.stockUpdatedAt, now);
 
           return (
             <div
@@ -743,11 +810,34 @@ export default function InventoryManager() {
                           display: "flex",
                           gap: "12px",
                           flexWrap: "wrap",
+                          alignItems: "center",
                         }}
                       >
                         {product.sku  && <span>SKU: <strong style={{ color: "#374151" }}>{product.sku}</strong></span>}
                         {product.asin && <span>ASIN: <strong style={{ color: "#374151" }}>{product.asin}</strong></span>}
                         {product.jan  && <span>JAN: <strong style={{ color: "#374151" }}>{product.jan}</strong></span>}
+                        {updateInfo ? (
+                          <span style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                            在庫更新日：<strong style={{ color: "#374151" }}>{updateInfo.label}</strong>
+                            {updateInfo.needsUpdate && (
+                              <span
+                                style={{
+                                  background: "#fef3c7",
+                                  border: "1px solid #fcd34d",
+                                  borderRadius: "4px",
+                                  padding: "1px 6px",
+                                  color: "#92400e",
+                                  fontSize: "11px",
+                                  fontWeight: "700",
+                                }}
+                              >
+                                要更新
+                              </span>
+                            )}
+                          </span>
+                        ) : (
+                          <span style={{ color: "#d1d5db" }}>在庫更新日：未設定</span>
+                        )}
                       </div>
                     </div>
                     <div
