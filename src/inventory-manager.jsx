@@ -665,7 +665,7 @@ function FbaUploadModal({ products, onUpdate, onClose }) {
       return;
     }
 
-    const updates = [], skipped = [];
+    const updates = [], skipped = [], csvRows = [];
     const seenKeys = new Set();
     for (let i = 1; i < lines.length; i++) {
       const cols = parseRow(lines[i]);
@@ -676,8 +676,9 @@ function FbaUploadModal({ products, onUpdate, onClose }) {
       if (!asin && !sku) continue;
       if (isNaN(qty)) continue;
       const rowKey = (asin + '|' + sku).toUpperCase();
-      if (seenKeys.has(rowKey)) continue;  // 同一行の重複をスキップ
+      if (seenKeys.has(rowKey)) continue;
       seenKeys.add(rowKey);
+      csvRows.push({ asin, sku, qty, name });
 
       // 1. ASINで照合 → 2. SKUで照合
       const product =
@@ -691,7 +692,7 @@ function FbaUploadModal({ products, onUpdate, onClose }) {
       }
     }
     if (updates.length > 0) onUpdate(updates, new Date().toISOString());
-    setResult({ updates, skipped });
+    setResult({ updates, skipped, csvRows, detectedCols: { asinIdx, skuIdx, qtyIdx, qtyColName: headers[qtyIdx] } });
   };
 
   const handleFile = (file) => {
@@ -834,6 +835,77 @@ function FbaUploadModal({ products, onUpdate, onClose }) {
                   ))}
                 </div>
               </div>
+            )}
+            {/* デバッグパネル */}
+            {result.csvRows && (
+              <details style={{ marginBottom:"16px" }}>
+                <summary style={{ fontSize:"12px", fontWeight:"600", color:"#6b7280",
+                  cursor:"pointer", userSelect:"none", padding:"8px 0" }}>
+                  🔍 照合デバッグ情報（クリックで展開）
+                </summary>
+                <div style={{ marginTop:"10px", display:"grid", gridTemplateColumns:"1fr 1fr", gap:"12px" }}>
+                  {/* ツール登録製品 */}
+                  <div>
+                    <div style={{ fontSize:"11px", fontWeight:"700", color:"#374151", marginBottom:"6px" }}>
+                      ツール登録製品（{products.length}件）
+                    </div>
+                    <div style={{ background:"#f9fafb", border:"1px solid #e5e7eb", borderRadius:"6px",
+                      padding:"8px", maxHeight:"200px", overflowY:"auto", fontSize:"11px",
+                      fontFamily:"monospace" }}>
+                      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:"4px",
+                        color:"#9ca3af", fontWeight:"600", marginBottom:"4px",
+                        paddingBottom:"4px", borderBottom:"1px solid #e5e7eb" }}>
+                        <span>ASIN</span><span>SKU</span>
+                      </div>
+                      {products.map(p => (
+                        <div key={p.id} style={{ display:"grid", gridTemplateColumns:"1fr 1fr",
+                          gap:"4px", padding:"2px 0", borderBottom:"1px solid #f3f4f6",
+                          color: p.asin || p.sku ? "#111827" : "#d1d5db" }}>
+                          <span style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}
+                            title={p.asin}>{p.asin || '—'}</span>
+                          <span style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}
+                            title={p.sku}>{p.sku || '—'}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  {/* CSV読み取りデータ */}
+                  <div>
+                    <div style={{ fontSize:"11px", fontWeight:"700", color:"#374151", marginBottom:"6px" }}>
+                      CSV読み取り（{result.csvRows.length}行）
+                      {result.detectedCols && (
+                        <span style={{ color:"#9ca3af", fontWeight:"400", marginLeft:"6px" }}>
+                          在庫列:「{result.detectedCols.qtyColName}」
+                        </span>
+                      )}
+                    </div>
+                    <div style={{ background:"#f9fafb", border:"1px solid #e5e7eb", borderRadius:"6px",
+                      padding:"8px", maxHeight:"200px", overflowY:"auto", fontSize:"11px",
+                      fontFamily:"monospace" }}>
+                      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr auto", gap:"4px",
+                        color:"#9ca3af", fontWeight:"600", marginBottom:"4px",
+                        paddingBottom:"4px", borderBottom:"1px solid #e5e7eb" }}>
+                        <span>ASIN</span><span>SKU</span><span>在庫</span>
+                      </div>
+                      {result.csvRows.map((r, i) => {
+                        const matched = result.updates.some(u => u.asin === r.asin && u.sku === r.sku);
+                        return (
+                          <div key={i} style={{ display:"grid", gridTemplateColumns:"1fr 1fr auto",
+                            gap:"4px", padding:"2px 0", borderBottom:"1px solid #f3f4f6",
+                            color: matched ? "#15803d" : "#374151",
+                            background: matched ? "#f0fdf4" : "transparent" }}>
+                            <span style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}
+                              title={r.asin}>{r.asin || '—'}</span>
+                            <span style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}
+                              title={r.sku}>{r.sku || '—'}</span>
+                            <span style={{ textAlign:"right" }}>{r.qty}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              </details>
             )}
             <div style={{ display:"flex", gap:"10px" }}>
               <button onClick={() => setResult(null)}
