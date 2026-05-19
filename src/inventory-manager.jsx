@@ -643,6 +643,7 @@ function FbaUploadModal({ products, onUpdate, onClose }) {
     const headers = parseRow(lines[0]).map(h => h.toLowerCase());
 
     const asinIdx = headers.findIndex(h => h === 'asin');
+    const skuIdx  = headers.findIndex(h => h === 'sku');
     // 「在庫あり」を最優先に、順番通りに探す
     const qtyPriority = ['在庫あり', 'fbaの在庫数', 'afn-fulfillable-quantity', 'fulfillable-quantity', 'fulfillable quantity'];
     let qtyIdx = -1;
@@ -655,8 +656,8 @@ function FbaUploadModal({ products, onUpdate, onClose }) {
       h === 'product-name' || h === '商品名' || h === 'title' || h === 'name'
     );
 
-    if (asinIdx === -1) {
-      setResult({ error: 'ASIN列が見つかりません。Amazon FBA在庫CSVを使用してください。' });
+    if (asinIdx === -1 && skuIdx === -1) {
+      setResult({ error: 'ASIN列もSKU列も見つかりません。Amazon FBA在庫CSVを使用してください。' });
       return;
     }
     if (qtyIdx === -1) {
@@ -665,22 +666,28 @@ function FbaUploadModal({ products, onUpdate, onClose }) {
     }
 
     const updates = [], skipped = [];
-    const seenAsins = new Set();
+    const seenKeys = new Set();
     for (let i = 1; i < lines.length; i++) {
       const cols = parseRow(lines[i]);
-      const asin = cols[asinIdx]?.trim();
-      const qty = parseInt(cols[qtyIdx]?.trim(), 10);
+      const asin = asinIdx !== -1 ? cols[asinIdx]?.trim() : '';
+      const sku  = skuIdx  !== -1 ? cols[skuIdx]?.trim()  : '';
+      const qty  = parseInt(cols[qtyIdx]?.trim(), 10);
       const name = nameIdx !== -1 ? cols[nameIdx]?.trim() : '';
-      if (!asin) continue;
+      if (!asin && !sku) continue;
       if (isNaN(qty)) continue;
-      const asinKey = asin.toUpperCase();
-      if (seenAsins.has(asinKey)) continue;  // 同ASINの2行目以降はスキップ
-      seenAsins.add(asinKey);
-      const product = products.find(p => p.asin && p.asin.trim().toUpperCase() === asinKey);
+      const rowKey = (asin + '|' + sku).toUpperCase();
+      if (seenKeys.has(rowKey)) continue;  // 同一行の重複をスキップ
+      seenKeys.add(rowKey);
+
+      // 1. ASINで照合 → 2. SKUで照合
+      const product =
+        (asin && products.find(p => p.asin && p.asin.trim().toUpperCase() === asin.toUpperCase())) ||
+        (sku  && products.find(p => p.sku  && p.sku.trim().toUpperCase()  === sku.toUpperCase()));
+
       if (product) {
-        updates.push({ id: product.id, name: product.name, asin, oldQty: product.stock.FBA, newQty: qty });
+        updates.push({ id: product.id, name: product.name, asin, sku, oldQty: product.stock.FBA, newQty: qty });
       } else {
-        skipped.push({ asin, name, qty });
+        skipped.push({ asin, sku, name, qty });
       }
     }
     if (updates.length > 0) onUpdate(updates, new Date().toISOString());
@@ -798,7 +805,9 @@ function FbaUploadModal({ products, onUpdate, onClose }) {
                       fontSize:"12px", alignItems:"center", gap:"16px" }}>
                       <div>
                         <div style={{ fontWeight:"600", color:"#111827" }}>{u.name}</div>
-                        <div style={{ color:"#9ca3af", fontSize:"11px" }}>ASIN: {u.asin}</div>
+                        <div style={{ color:"#9ca3af", fontSize:"11px" }}>
+                          {u.asin && `ASIN: ${u.asin}`}{u.asin && u.sku && ' / '}{u.sku && `SKU: ${u.sku}`}
+                        </div>
                       </div>
                       <div style={{ color:"#9ca3af", fontSize:"11px", whiteSpace:"nowrap" }}>{u.oldQty}個 →</div>
                       <div style={{ fontWeight:"700", color:"#16a34a", fontSize:"15px", whiteSpace:"nowrap" }}>{u.newQty}個</div>
@@ -810,14 +819,14 @@ function FbaUploadModal({ products, onUpdate, onClose }) {
             {result.skipped?.length > 0 && (
               <div style={{ marginBottom:"16px" }}>
                 <div style={{ fontSize:"12px", fontWeight:"600", color:"#9ca3af", marginBottom:"6px" }}>
-                  スキップ（{result.skipped.length}件） — ASIN未登録のため照合不可
+                  スキップ（{result.skipped.length}件） — ASINもSKUも一致しないため照合不可
                 </div>
                 <div style={{ background:"#f9fafb", border:"1px solid #e5e7eb", borderRadius:"8px",
                   padding:"8px 12px", maxHeight:"120px", overflowY:"auto" }}>
                   {result.skipped.map((s, i) => (
                     <div key={i} style={{ fontSize:"11px", color:"#6b7280", padding:"3px 0",
                       borderTop: i===0 ? "none" : "1px solid #f3f4f6" }}>
-                      <span style={{ fontFamily:"monospace", color:"#374151" }}>{s.asin}</span>
+                      <span style={{ fontFamily:"monospace", color:"#374151" }}>{s.asin || s.sku}</span>
                       {s.name && <span style={{ color:"#9ca3af", marginLeft:"8px" }}>
                         {s.name.slice(0, 45)}{s.name.length > 45 ? '…' : ''}
                       </span>}
