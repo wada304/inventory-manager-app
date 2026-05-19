@@ -643,14 +643,14 @@ function FbaUploadModal({ products, onUpdate, onClose }) {
     const headers = parseRow(lines[0]).map(h => h.toLowerCase());
 
     const asinIdx = headers.findIndex(h => h === 'asin');
-    const qtyIdx = headers.findIndex(h =>
-      h === 'afn-fulfillable-quantity' ||
-      h === '在庫あり' ||
-      h === 'fbaの在庫数' ||
-      h.includes('販売可') ||
-      h === 'fulfillable-quantity' ||
-      h === 'fulfillable quantity'
-    );
+    // 「在庫あり」を最優先に、順番通りに探す
+    const qtyPriority = ['在庫あり', 'fbaの在庫数', 'afn-fulfillable-quantity', 'fulfillable-quantity', 'fulfillable quantity'];
+    let qtyIdx = -1;
+    for (const pat of qtyPriority) {
+      const idx = headers.findIndex(h => h === pat);
+      if (idx !== -1) { qtyIdx = idx; break; }
+    }
+    if (qtyIdx === -1) qtyIdx = headers.findIndex(h => h.includes('販売可'));
     const nameIdx = headers.findIndex(h =>
       h === 'product-name' || h === '商品名' || h === 'title' || h === 'name'
     );
@@ -665,6 +665,7 @@ function FbaUploadModal({ products, onUpdate, onClose }) {
     }
 
     const updates = [], skipped = [];
+    const seenAsins = new Set();
     for (let i = 1; i < lines.length; i++) {
       const cols = parseRow(lines[i]);
       const asin = cols[asinIdx]?.trim();
@@ -672,7 +673,10 @@ function FbaUploadModal({ products, onUpdate, onClose }) {
       const name = nameIdx !== -1 ? cols[nameIdx]?.trim() : '';
       if (!asin) continue;
       if (isNaN(qty)) continue;
-      const product = products.find(p => p.asin && p.asin.trim().toUpperCase() === asin.toUpperCase());
+      const asinKey = asin.toUpperCase();
+      if (seenAsins.has(asinKey)) continue;  // 同ASINの2行目以降はスキップ
+      seenAsins.add(asinKey);
+      const product = products.find(p => p.asin && p.asin.trim().toUpperCase() === asinKey);
       if (product) {
         updates.push({ id: product.id, name: product.name, asin, oldQty: product.stock.FBA, newQty: qty });
       } else {
