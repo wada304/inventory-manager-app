@@ -645,6 +645,8 @@ function FbaUploadModal({ products, onUpdate, onClose }) {
     const asinIdx = headers.findIndex(h => h === 'asin');
     const qtyIdx = headers.findIndex(h =>
       h === 'afn-fulfillable-quantity' ||
+      h === '在庫あり' ||
+      h === 'fbaの在庫数' ||
       h.includes('販売可') ||
       h === 'fulfillable-quantity' ||
       h === 'fulfillable quantity'
