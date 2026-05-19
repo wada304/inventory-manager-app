@@ -770,16 +770,21 @@ function FbaUploadModal({ products, onUpdate, onClose }) {
                 ⚠️ {result.error}
               </div>
             )}
-            {!result.error && result.updates?.length === 0 && (
-              <div style={{ background:"#fef3c7", border:"1px solid #fcd34d", borderRadius:"8px",
-                padding:"12px 16px", color:"#92400e", fontSize:"13px", marginBottom:"12px" }}>
-                ⚠️ ASINが一致する製品がありませんでした。製品編集でASINを登録してから再度お試しください。
+            {!result.error && (
+              <div style={{ background: result.updates?.length > 0 ? "#f0fdf4" : "#f9fafb",
+                border: `1px solid ${result.updates?.length > 0 ? "#86efac" : "#e5e7eb"}`,
+                borderRadius:"8px", padding:"12px 16px", fontSize:"13px",
+                color: result.updates?.length > 0 ? "#15803d" : "#6b7280", marginBottom:"12px",
+                fontWeight:"600" }}>
+                {result.updates?.length > 0 ? "✅" : "—"}{" "}
+                {result.updates?.length}件更新しました。
+                {result.skipped?.length > 0 && `${result.skipped.length}件はASIN未登録のためスキップしました。`}
               </div>
             )}
             {result.updates?.length > 0 && (
               <div style={{ marginBottom:"16px" }}>
-                <div style={{ fontSize:"13px", fontWeight:"700", color:"#16a34a", marginBottom:"8px" }}>
-                  ✅ FBA在庫を更新しました（{result.updates.length}件）
+                <div style={{ fontSize:"12px", fontWeight:"600", color:"#6b7280", marginBottom:"8px" }}>
+                  更新内容
                 </div>
                 <div style={{ border:"1px solid #e5e7eb", borderRadius:"8px", overflow:"hidden" }}>
                   {result.updates.map((u, i) => (
