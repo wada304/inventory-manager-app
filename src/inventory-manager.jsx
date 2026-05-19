@@ -632,8 +632,9 @@ function FbaUploadModal({ products, onUpdate, onClose }) {
   const inputRef = useRef(null);
 
   const parseCSV = (text) => {
+    // BOM除去（﻿）＋ \r\n / \r / \n すべての改行形式に対応
     const content = text.startsWith('﻿') ? text.slice(1) : text;
-    const lines = content.split(/\r?\n/).filter(l => l.trim());
+    const lines = content.split(/\r\n|\r|\n/).filter(l => l.trim());
     if (lines.length < 2) {
       setResult({ error: 'CSVデータが空または1行しかありません。' });
       return;
@@ -673,29 +674,34 @@ function FbaUploadModal({ products, onUpdate, onClose }) {
     }
 
     const updates = [], skipped = [], csvRows = [];
-    const seenKeys = new Set();
+    const updatedProductIds = new Set();  // 同一製品への二重更新を防ぐ
+    const cleanStr = s => (s || '').replace(/^["']+|["']+$/g, '').trim().toUpperCase();
+
     for (let i = 1; i < lines.length; i++) {
       const cols = parseRow(lines[i]);
-      const asin = asinIdx !== -1 ? cols[asinIdx]?.trim() : '';
-      const sku  = skuIdx  !== -1 ? cols[skuIdx]?.trim()  : '';
+      const asin = asinIdx !== -1 ? (cols[asinIdx] ?? '').trim() : '';
+      const sku  = skuIdx  !== -1 ? (cols[skuIdx]  ?? '').trim() : '';
       const qty  = parseInt(cols[qtyIdx]?.trim(), 10);
-      const name = nameIdx !== -1 ? cols[nameIdx]?.trim() : '';
-      if (!asin && !sku) continue;
-      if (isNaN(qty)) continue;
-      const rowKey = (asin + '|' + sku).toUpperCase();
-      if (seenKeys.has(rowKey)) continue;
-      seenKeys.add(rowKey);
-      csvRows.push({ asin, sku, qty, name });
+      const name = nameIdx !== -1 ? (cols[nameIdx] ?? '').trim() : '';
 
-      // 1. ASINで照合 → 2. SKUで照合（両辺とも引用符・空白を除去してから比較）
-      const cleanStr = s => (s || '').replace(/^["']+|["']+$/g, '').trim().toUpperCase();
+      if (!asin && !sku) continue;  // ASINもSKUも空の行はスキップ
+
+      // デバッグ用に全行を記録（重複・NaN行も含む）
+      csvRows.push({ asin, sku, qty: isNaN(qty) ? '—' : qty, name, _rowIdx: i });
+
+      if (isNaN(qty)) continue;  // 在庫数が数値でない行はスキップ
+
+      // 1. ASINで照合 → 2. SKUで照合
       const asinKey = cleanStr(asin), skuKey = cleanStr(sku);
       const product =
         (asinKey && products.find(p => cleanStr(p.asin) === asinKey)) ||
         (skuKey  && products.find(p => cleanStr(p.sku)  === skuKey));
 
       if (product) {
-        updates.push({ id: product.id, name: product.name, asin, sku, oldQty: product.stock.FBA, newQty: qty });
+        if (!updatedProductIds.has(product.id)) {  // 同一製品は最初の行のみ更新
+          updatedProductIds.add(product.id);
+          updates.push({ id: product.id, name: product.name, asin, sku, oldQty: product.stock.FBA, newQty: qty });
+        }
       } else {
         skipped.push({ asin, sku, name, qty });
       }
@@ -703,10 +709,11 @@ function FbaUploadModal({ products, onUpdate, onClose }) {
     if (updates.length > 0) onUpdate(updates, new Date().toISOString());
     setResult({
       updates, skipped, csvRows,
+      rawLineCount: lines.length - 1,  // ヘッダー除いた全行数
       detectedCols: {
-        asinCol:  asinIdx !== -1 ? `[${asinIdx}] "${headers[asinIdx]}"` : '未検出',
-        skuCol:   skuIdx  !== -1 ? `[${skuIdx}]  "${headers[skuIdx]}"` : '未検出',
-        qtyCol:   qtyIdx  !== -1 ? `[${qtyIdx}]  "${headers[qtyIdx]}"` : '未検出',
+        asinCol:    asinIdx !== -1 ? `[${asinIdx}] "${headers[asinIdx]}"` : '未検出',
+        skuCol:     skuIdx  !== -1 ? `[${skuIdx}]  "${headers[skuIdx]}"` : '未検出',
+        qtyCol:     qtyIdx  !== -1 ? `[${qtyIdx}]  "${headers[qtyIdx]}"` : '未検出',
         allHeaders: headers.map((h, i) => `[${i}] ${h}`).join(' / '),
       },
     });
@@ -859,6 +866,7 @@ function FbaUploadModal({ products, onUpdate, onClose }) {
                 <summary style={{ fontSize:"12px", fontWeight:"600", color:"#6b7280",
                   cursor:"pointer", userSelect:"none", padding:"8px 0" }}>
                   🔍 照合デバッグ情報（クリックで展開）
+                  　ファイル行数: {result.rawLineCount}行 / 表示行数: {result.csvRows?.length}行
                 </summary>
                 <div style={{ marginTop:"8px", display:"flex", flexDirection:"column", gap:"10px" }}>
                   {/* 検出列名 */}
