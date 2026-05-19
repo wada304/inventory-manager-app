@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
+import Papa from 'papaparse';
 import {
   BarChart, Bar, LineChart, Line,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
@@ -631,74 +632,56 @@ function FbaUploadModal({ products, onUpdate, onClose }) {
   const [dragging, setDragging] = useState(false);
   const inputRef = useRef(null);
 
-  const parseCSV = (text) => {
-    // BOM除去（﻿）＋ \r\n / \r / \n すべての改行形式に対応
-    const content = text.startsWith('﻿') ? text.slice(1) : text;
-    const lines = content.split(/\r\n|\r|\n/).filter(l => l.trim());
-    if (lines.length < 2) {
-      setResult({ error: 'CSVデータが空または1行しかありません。' });
-      return;
-    }
-    const delimiter = lines[0].includes('\t') ? '\t' : ',';
-    const parseRow = (line) => line.split(delimiter).map(c => c.trim().replace(/^"|"$/g, ''));
-    const headers = parseRow(lines[0]).map(h => h.trim().toLowerCase());
+  const processRows = (rows, fields) => {
+    const lc = s => (s || '').trim().toLowerCase();
+    const cleanStr = s => (s || '').replace(/^["']+|["']+$/g, '').trim().toUpperCase();
 
-    const asinIdx = headers.findIndex(h => h === 'asin');
-    // seller-sku / 出品者sku / sku の順で探す
-    const skuIdx = (() => {
-      for (const pat of ['seller-sku', '出品者sku', 'sku']) {
-        const idx = headers.findIndex(h => h === pat);
-        if (idx !== -1) return idx;
+    // 列名を優先順で検索（大文字小文字無視）
+    const findField = (patterns) => {
+      for (const pat of patterns) {
+        const f = fields.find(f => lc(f) === pat);
+        if (f) return f;
       }
-      return -1;
-    })();
-    // 「在庫あり」を最優先に、順番通りに探す
-    const qtyPriority = ['在庫あり', 'fbaの在庫数', 'afn-fulfillable-quantity', 'fulfillable-quantity', 'fulfillable quantity'];
-    let qtyIdx = -1;
-    for (const pat of qtyPriority) {
-      const idx = headers.findIndex(h => h === pat);
-      if (idx !== -1) { qtyIdx = idx; break; }
-    }
-    if (qtyIdx === -1) qtyIdx = headers.findIndex(h => h.includes('販売可'));
-    const nameIdx = headers.findIndex(h =>
-      h === 'product-name' || h === '商品名' || h === 'title' || h === 'name'
-    );
+      return fields.find(f => patterns.some(pat => lc(f).includes(pat))) || null;
+    };
 
-    if (asinIdx === -1 && skuIdx === -1) {
-      setResult({ error: 'ASIN列もSKU列も見つかりません。Amazon FBA在庫CSVを使用してください。' });
+    const asinField = findField(['asin']);
+    const skuField  = findField(['seller-sku', '出品者sku', 'sku']);
+    const qtyField  = findField(['在庫あり', 'fbaの在庫数', 'afn-fulfillable-quantity',
+                                 'fulfillable-quantity', 'fulfillable quantity', '販売可']);
+    const nameField = findField(['商品名', 'product-name', 'title', 'name']);
+
+    if (!asinField && !skuField) {
+      setResult({ error: 'ASIN列もSKU列も見つかりません。\n検出済み列: ' + fields.slice(0, 10).join(', ') });
       return;
     }
-    if (qtyIdx === -1) {
-      setResult({ error: '在庫数（販売可）列が見つかりません。Amazon FBA在庫レポートを使用してください。\n検出済みの列: ' + headers.slice(0,8).join(', ') });
+    if (!qtyField) {
+      setResult({ error: '在庫数列が見つかりません。\n検出済み列: ' + fields.slice(0, 10).join(', ') });
       return;
     }
 
     const updates = [], skipped = [], csvRows = [];
-    const updatedProductIds = new Set();  // 同一製品への二重更新を防ぐ
-    const cleanStr = s => (s || '').replace(/^["']+|["']+$/g, '').trim().toUpperCase();
+    const updatedProductIds = new Set();
 
-    for (let i = 1; i < lines.length; i++) {
-      const cols = parseRow(lines[i]);
-      const asin = asinIdx !== -1 ? (cols[asinIdx] ?? '').trim() : '';
-      const sku  = skuIdx  !== -1 ? (cols[skuIdx]  ?? '').trim() : '';
-      const qty  = parseInt(cols[qtyIdx]?.trim(), 10);
-      const name = nameIdx !== -1 ? (cols[nameIdx] ?? '').trim() : '';
+    for (const row of rows) {
+      const asin = ((asinField ? row[asinField] : '') || '').trim();
+      const sku  = ((skuField  ? row[skuField]  : '') || '').trim();
+      const qty  = parseInt((row[qtyField] || '').replace(/,/g, ''), 10);
+      const name = ((nameField ? row[nameField] : '') || '').trim();
 
-      if (!asin && !sku) continue;  // ASINもSKUも空の行はスキップ
+      if (!asin && !sku) continue;
 
-      // デバッグ用に全行を記録（重複・NaN行も含む）
-      csvRows.push({ asin, sku, qty: isNaN(qty) ? '—' : qty, name, _rowIdx: i });
+      csvRows.push({ asin, sku, qty: isNaN(qty) ? '—' : qty, name });
 
-      if (isNaN(qty)) continue;  // 在庫数が数値でない行はスキップ
+      if (isNaN(qty)) continue;
 
-      // 1. ASINで照合 → 2. SKUで照合
       const asinKey = cleanStr(asin), skuKey = cleanStr(sku);
       const product =
         (asinKey && products.find(p => cleanStr(p.asin) === asinKey)) ||
         (skuKey  && products.find(p => cleanStr(p.sku)  === skuKey));
 
       if (product) {
-        if (!updatedProductIds.has(product.id)) {  // 同一製品は最初の行のみ更新
+        if (!updatedProductIds.has(product.id)) {
           updatedProductIds.add(product.id);
           updates.push({ id: product.id, name: product.name, asin, sku, oldQty: product.stock.FBA, newQty: qty });
         }
@@ -706,25 +689,29 @@ function FbaUploadModal({ products, onUpdate, onClose }) {
         skipped.push({ asin, sku, name, qty });
       }
     }
+
     if (updates.length > 0) onUpdate(updates, new Date().toISOString());
     setResult({
       updates, skipped, csvRows,
-      rawLineCount: lines.length - 1,  // ヘッダー除いた全行数
+      rawLineCount: rows.length,
       detectedCols: {
-        asinCol:    asinIdx !== -1 ? `[${asinIdx}] "${headers[asinIdx]}"` : '未検出',
-        skuCol:     skuIdx  !== -1 ? `[${skuIdx}]  "${headers[skuIdx]}"` : '未検出',
-        qtyCol:     qtyIdx  !== -1 ? `[${qtyIdx}]  "${headers[qtyIdx]}"` : '未検出',
-        allHeaders: headers.map((h, i) => `[${i}] ${h}`).join(' / '),
+        asinCol:    asinField  ? `"${asinField}"`  : '未検出',
+        skuCol:     skuField   ? `"${skuField}"`   : '未検出',
+        qtyCol:     qtyField   ? `"${qtyField}"`   : '未検出',
+        allHeaders: fields.map((f, i) => `[${i}] ${f}`).join(' / '),
       },
     });
   };
 
   const handleFile = (file) => {
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (e) => parseCSV(e.target.result);
-    reader.onerror = () => setResult({ error: 'ファイルの読み込みに失敗しました。' });
-    reader.readAsText(file, 'UTF-8');
+    Papa.parse(file, {
+      header: true,
+      skipEmptyLines: true,
+      encoding: 'UTF-8',
+      complete: ({ data, meta }) => processRows(data, meta.fields || []),
+      error: (err) => setResult({ error: `ファイルの読み込みに失敗しました: ${err.message}` }),
+    });
   };
 
   return (
