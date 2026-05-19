@@ -687,10 +687,12 @@ function FbaUploadModal({ products, onUpdate, onClose }) {
       seenKeys.add(rowKey);
       csvRows.push({ asin, sku, qty, name });
 
-      // 1. ASINで照合 → 2. SKUで照合
+      // 1. ASINで照合 → 2. SKUで照合（両辺とも引用符・空白を除去してから比較）
+      const cleanStr = s => (s || '').replace(/^["']+|["']+$/g, '').trim().toUpperCase();
+      const asinKey = cleanStr(asin), skuKey = cleanStr(sku);
       const product =
-        (asin && products.find(p => p.asin && p.asin.trim().toUpperCase() === asin.toUpperCase())) ||
-        (sku  && products.find(p => p.sku  && p.sku.trim().toUpperCase()  === sku.toUpperCase()));
+        (asinKey && products.find(p => cleanStr(p.asin) === asinKey)) ||
+        (skuKey  && products.find(p => cleanStr(p.sku)  === skuKey));
 
       if (product) {
         updates.push({ id: product.id, name: product.name, asin, sku, oldQty: product.stock.FBA, newQty: qty });
@@ -957,6 +959,8 @@ export default function InventoryManager() {
       if (!saved) return DEFAULT_PRODUCTS;
       return JSON.parse(saved).map(p => ({
         annualSales: emptyAnnual(), orderingMfg:0, orderingShip:0, bufferDays:14, ...p,
+        asin: (p.asin || '').replace(/^["']+|["']+$/g, '').trim(),
+        sku:  (p.sku  || '').replace(/^["']+|["']+$/g, '').trim(),
       }));
     } catch { return DEFAULT_PRODUCTS; }
   });
@@ -974,7 +978,12 @@ export default function InventoryManager() {
   }, [products]);
 
   const saveProduct = useCallback((form) => {
-    setProducts(prev => form.id ? prev.map(p => p.id===form.id ? form : p) : [...prev, { ...form, id:Date.now() }]);
+    const clean = {
+      ...form,
+      asin: (form.asin || '').replace(/^["']+|["']+$/g, '').trim(),
+      sku:  (form.sku  || '').replace(/^["']+|["']+$/g, '').trim(),
+    };
+    setProducts(prev => clean.id ? prev.map(p => p.id===clean.id ? clean : p) : [...prev, { ...clean, id:Date.now() }]);
     setEditProduct(null);
   }, []);
 
