@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import {
   BarChart, Bar, LineChart, Line,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
@@ -7,6 +7,7 @@ import {
 const CHANNELS = ["Amazon", "楽天市場"];
 const MONTHS_JP = ["1月","2月","3月","4月","5月","6月","7月","8月","9月","10月","11月","12月"];
 const STORAGE_KEY = "linowa_inventory_v3";
+const FBA_UPDATED_KEY = "linowa_fba_updated_v1";
 const FONT = "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
 const GRID_COLS = "112px 1fr 130px 88px 170px 105px 105px 76px";
 const COLOR_AMZ = "#e8622a";
@@ -80,6 +81,9 @@ function addDays(base, days) {
   const d = new Date(base); d.setDate(d.getDate() + days); return d;
 }
 function fmtDate(date) { return `${date.getMonth()+1}月${date.getDate()}日`; }
+function fmtDateTime(date) {
+  return `${date.getMonth()+1}月${date.getDate()}日 ${String(date.getHours()).padStart(2,'0')}時${String(date.getMinutes()).padStart(2,'0')}分`;
+}
 function getStockUpdateInfo(stockUpdatedAt, now) {
   if (!stockUpdatedAt) return null;
   const updated = new Date(stockUpdatedAt);
@@ -621,6 +625,217 @@ function InventoryView({ products, now, onEdit, onDelete, filter, setFilter }) {
   );
 }
 
+// ── Amazon FBA CSV アップロードモーダル ──────────────────
+function FbaUploadModal({ products, onUpdate, onClose }) {
+  const [result, setResult] = useState(null);
+  const [dragging, setDragging] = useState(false);
+  const inputRef = useRef(null);
+
+  const parseCSV = (text) => {
+    const content = text.startsWith('﻿') ? text.slice(1) : text;
+    const lines = content.split(/\r?\n/).filter(l => l.trim());
+    if (lines.length < 2) {
+      setResult({ error: 'CSVデータが空または1行しかありません。' });
+      return;
+    }
+    const delimiter = lines[0].includes('\t') ? '\t' : ',';
+    const parseRow = (line) => line.split(delimiter).map(c => c.trim().replace(/^"|"$/g, ''));
+    const headers = parseRow(lines[0]).map(h => h.toLowerCase());
+
+    const asinIdx = headers.findIndex(h => h === 'asin');
+    const qtyIdx = headers.findIndex(h =>
+      h === 'afn-fulfillable-quantity' ||
+      h.includes('販売可') ||
+      h === 'fulfillable-quantity' ||
+      h === 'fulfillable quantity'
+    );
+    const nameIdx = headers.findIndex(h =>
+      h === 'product-name' || h === '商品名' || h === 'title' || h === 'name'
+    );
+
+    if (asinIdx === -1) {
+      setResult({ error: 'ASIN列が見つかりません。Amazon FBA在庫CSVを使用してください。' });
+      return;
+    }
+    if (qtyIdx === -1) {
+      setResult({ error: '在庫数（販売可）列が見つかりません。Amazon FBA在庫レポートを使用してください。\n検出済みの列: ' + headers.slice(0,8).join(', ') });
+      return;
+    }
+
+    const updates = [], skipped = [];
+    for (let i = 1; i < lines.length; i++) {
+      const cols = parseRow(lines[i]);
+      const asin = cols[asinIdx]?.trim();
+      const qty = parseInt(cols[qtyIdx]?.trim(), 10);
+      const name = nameIdx !== -1 ? cols[nameIdx]?.trim() : '';
+      if (!asin) continue;
+      if (isNaN(qty)) continue;
+      const product = products.find(p => p.asin && p.asin.trim().toUpperCase() === asin.toUpperCase());
+      if (product) {
+        updates.push({ id: product.id, name: product.name, asin, oldQty: product.stock.FBA, newQty: qty });
+      } else {
+        skipped.push({ asin, name, qty });
+      }
+    }
+    if (updates.length > 0) onUpdate(updates, new Date().toISOString());
+    setResult({ updates, skipped });
+  };
+
+  const handleFile = (file) => {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (e) => parseCSV(e.target.result);
+    reader.onerror = () => setResult({ error: 'ファイルの読み込みに失敗しました。' });
+    reader.readAsText(file, 'UTF-8');
+  };
+
+  return (
+    <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.45)", backdropFilter:"blur(4px)",
+      zIndex:100, display:"flex", alignItems:"center", justifyContent:"center", padding:"20px" }}
+      onClick={onClose}>
+      <div style={{ background:"#fff", border:"1px solid #e5e7eb", borderRadius:"16px", padding:"32px",
+        width:"100%", maxWidth:"640px", maxHeight:"88vh", overflowY:"auto", fontFamily:FONT,
+        boxShadow:"0 20px 60px rgba(0,0,0,0.15)" }}
+        onClick={e => e.stopPropagation()}>
+
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:"24px" }}>
+          <div>
+            <h2 style={{ color:"#111827", fontSize:"18px", margin:0, fontWeight:"700" }}>Amazon FBA在庫 CSV更新</h2>
+            <p style={{ color:"#6b7280", fontSize:"12px", margin:"4px 0 0" }}>
+              セラーセントラルからダウンロードしたCSVでFBA在庫を一括更新します
+            </p>
+          </div>
+          <button onClick={onClose} style={{ background:"none", border:"none", color:"#9ca3af",
+            cursor:"pointer", fontSize:"20px", flexShrink:0, marginLeft:"16px" }}>✕</button>
+        </div>
+
+        {/* ダウンロード手順 */}
+        <div style={{ background:"#eff6ff", border:"1px solid #bfdbfe", borderRadius:"10px",
+          padding:"16px", marginBottom:"20px" }}>
+          <div style={{ fontSize:"12px", fontWeight:"700", color:"#1d4ed8", marginBottom:"10px" }}>
+            📋 CSVのダウンロード手順（セラーセントラル）
+          </div>
+          {[
+            "セラーセントラルにログイン",
+            "上部メニュー「在庫」→「在庫管理」をクリック",
+            "右上の「ダウンロード」ボタンをクリック",
+            "「すべての在庫」を選択してCSVをダウンロード",
+            "ダウンロードしたファイルを下のエリアにアップロード",
+          ].map((step, i) => (
+            <div key={i} style={{ display:"flex", gap:"10px", alignItems:"flex-start",
+              marginBottom: i < 4 ? "6px" : 0 }}>
+              <span style={{ background:"#1d4ed8", color:"#fff", borderRadius:"50%",
+                width:"18px", height:"18px", minWidth:"18px", display:"flex", alignItems:"center",
+                justifyContent:"center", fontSize:"10px", fontWeight:"700", marginTop:"1px" }}>{i+1}</span>
+              <span style={{ fontSize:"12px", color:"#1e40af", lineHeight:"1.5" }}>{step}</span>
+            </div>
+          ))}
+          <div style={{ marginTop:"10px", fontSize:"11px", color:"#3b82f6",
+            borderTop:"1px solid #bfdbfe", paddingTop:"10px" }}>
+            ※ ASINが登録されていない製品は照合されません。先に各製品の編集画面でASINを登録してください。
+            文字化けが発生した場合はファイルをUTF-8で保存し直してください。
+          </div>
+        </div>
+
+        {/* ファイルアップロードエリア */}
+        {!result && (
+          <div
+            onDragOver={e => { e.preventDefault(); setDragging(true); }}
+            onDragLeave={() => setDragging(false)}
+            onDrop={e => { e.preventDefault(); setDragging(false); handleFile(e.dataTransfer.files[0]); }}
+            onClick={() => inputRef.current?.click()}
+            style={{ border:`2px dashed ${dragging ? "#3b82f6" : "#d1d5db"}`,
+              borderRadius:"10px", padding:"36px", textAlign:"center", cursor:"pointer",
+              background: dragging ? "#eff6ff" : "#f9fafb", transition:"all 0.2s" }}>
+            <div style={{ fontSize:"40px", marginBottom:"8px" }}>📂</div>
+            <div style={{ fontSize:"14px", color:"#374151", fontWeight:"600", marginBottom:"4px" }}>
+              CSVファイルをドラッグ＆ドロップ
+            </div>
+            <div style={{ fontSize:"12px", color:"#9ca3af", marginBottom:"8px" }}>または クリックしてファイルを選択</div>
+            <div style={{ fontSize:"11px", color:"#d1d5db" }}>対応形式：.csv / .txt（タブ区切り・カンマ区切り）</div>
+            <input ref={inputRef} type="file" accept=".csv,.txt" style={{ display:"none" }}
+              onChange={e => { handleFile(e.target.files[0]); e.target.value = ''; }} />
+          </div>
+        )}
+
+        {/* 結果表示 */}
+        {result && (
+          <div>
+            {result.error && (
+              <div style={{ background:"#fef2f2", border:"1px solid #fca5a5", borderRadius:"8px",
+                padding:"12px 16px", color:"#dc2626", fontSize:"13px", marginBottom:"12px",
+                whiteSpace:"pre-wrap" }}>
+                ⚠️ {result.error}
+              </div>
+            )}
+            {!result.error && result.updates?.length === 0 && (
+              <div style={{ background:"#fef3c7", border:"1px solid #fcd34d", borderRadius:"8px",
+                padding:"12px 16px", color:"#92400e", fontSize:"13px", marginBottom:"12px" }}>
+                ⚠️ ASINが一致する製品がありませんでした。製品編集でASINを登録してから再度お試しください。
+              </div>
+            )}
+            {result.updates?.length > 0 && (
+              <div style={{ marginBottom:"16px" }}>
+                <div style={{ fontSize:"13px", fontWeight:"700", color:"#16a34a", marginBottom:"8px" }}>
+                  ✅ FBA在庫を更新しました（{result.updates.length}件）
+                </div>
+                <div style={{ border:"1px solid #e5e7eb", borderRadius:"8px", overflow:"hidden" }}>
+                  {result.updates.map((u, i) => (
+                    <div key={i} style={{ display:"grid", gridTemplateColumns:"1fr auto auto",
+                      padding:"8px 12px", background: i%2===0 ? "#fff" : "#f9fafb",
+                      borderTop: i===0 ? "none" : "1px solid #f3f4f6",
+                      fontSize:"12px", alignItems:"center", gap:"16px" }}>
+                      <div>
+                        <div style={{ fontWeight:"600", color:"#111827" }}>{u.name}</div>
+                        <div style={{ color:"#9ca3af", fontSize:"11px" }}>ASIN: {u.asin}</div>
+                      </div>
+                      <div style={{ color:"#9ca3af", fontSize:"11px", whiteSpace:"nowrap" }}>{u.oldQty}個 →</div>
+                      <div style={{ fontWeight:"700", color:"#16a34a", fontSize:"15px", whiteSpace:"nowrap" }}>{u.newQty}個</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {result.skipped?.length > 0 && (
+              <div style={{ marginBottom:"16px" }}>
+                <div style={{ fontSize:"12px", fontWeight:"600", color:"#9ca3af", marginBottom:"6px" }}>
+                  スキップ（{result.skipped.length}件） — ASIN未登録のため照合不可
+                </div>
+                <div style={{ background:"#f9fafb", border:"1px solid #e5e7eb", borderRadius:"8px",
+                  padding:"8px 12px", maxHeight:"120px", overflowY:"auto" }}>
+                  {result.skipped.map((s, i) => (
+                    <div key={i} style={{ fontSize:"11px", color:"#6b7280", padding:"3px 0",
+                      borderTop: i===0 ? "none" : "1px solid #f3f4f6" }}>
+                      <span style={{ fontFamily:"monospace", color:"#374151" }}>{s.asin}</span>
+                      {s.name && <span style={{ color:"#9ca3af", marginLeft:"8px" }}>
+                        {s.name.slice(0, 45)}{s.name.length > 45 ? '…' : ''}
+                      </span>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            <div style={{ display:"flex", gap:"10px" }}>
+              <button onClick={() => setResult(null)}
+                style={{ flex:1, padding:"10px", background:"#f9fafb",
+                  border:"1px solid #d1d5db", borderRadius:"8px", color:"#374151",
+                  cursor:"pointer", fontFamily:FONT, fontSize:"13px" }}>
+                別のファイルを読み込む
+              </button>
+              <button onClick={onClose}
+                style={{ flex:1, padding:"10px", background:COLOR_AMZ,
+                  border:"none", borderRadius:"8px", color:"#fff",
+                  cursor:"pointer", fontFamily:FONT, fontSize:"13px", fontWeight:"600" }}>
+                完了
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── メインコンポーネント ───────────────────────────────
 export default function InventoryManager() {
   const [products, setProducts] = useState(() => {
@@ -636,6 +851,10 @@ export default function InventoryManager() {
   const [filter, setFilter] = useState("all");
   const [view, setView] = useState("inventory");
   const [now] = useState(new Date());
+  const [fbaUpdatedAt, setFbaUpdatedAt] = useState(() => {
+    try { return localStorage.getItem(FBA_UPDATED_KEY) || null; } catch { return null; }
+  });
+  const [showFbaUpload, setShowFbaUpload] = useState(false);
 
   useEffect(() => {
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(products)); } catch {}
@@ -649,6 +868,16 @@ export default function InventoryManager() {
   const deleteProduct = id => {
     if (confirm("この製品を削除しますか？")) setProducts(prev => prev.filter(p => p.id!==id));
   };
+
+  const updateFbaStock = useCallback((updates, timestamp) => {
+    setProducts(prev => prev.map(p => {
+      const upd = updates.find(u => u.id === p.id);
+      if (!upd) return p;
+      return { ...p, stock: { ...p.stock, FBA: upd.newQty }, stockUpdatedAt: timestamp.split('T')[0] };
+    }));
+    setFbaUpdatedAt(timestamp);
+    try { localStorage.setItem(FBA_UPDATED_KEY, timestamp); } catch {}
+  }, []);
 
   // 販売実績入力 → annualSales 更新 + monthlySales 自動反映
   const updateAnnualSales = useCallback((productId, channel, monthIdx, value) => {
@@ -713,12 +942,27 @@ export default function InventoryManager() {
             {now.toLocaleDateString("ja-JP", { year:"numeric", month:"long", day:"numeric" })}
           </div>
           {view === "inventory" && (
-            <button onClick={() => setEditProduct(newProduct)} style={{
-              padding:"10px 20px", background:COLOR_AMZ, border:"none",
-              borderRadius:"8px", color:"#fff", cursor:"pointer",
-              fontFamily:FONT, fontSize:"13px", fontWeight:"600" }}>
-              + 製品追加
-            </button>
+            <div style={{ display:"flex", flexDirection:"column", alignItems:"flex-end", gap:"6px" }}>
+              <div style={{ display:"flex", gap:"10px" }}>
+                <button onClick={() => setShowFbaUpload(true)} style={{
+                  padding:"10px 20px", background:"#fff", border:"1px solid #d1d5db",
+                  borderRadius:"8px", color:"#374151", cursor:"pointer",
+                  fontFamily:FONT, fontSize:"13px", fontWeight:"600" }}>
+                  📊 FBA CSV更新
+                </button>
+                <button onClick={() => setEditProduct(newProduct)} style={{
+                  padding:"10px 20px", background:COLOR_AMZ, border:"none",
+                  borderRadius:"8px", color:"#fff", cursor:"pointer",
+                  fontFamily:FONT, fontSize:"13px", fontWeight:"600" }}>
+                  + 製品追加
+                </button>
+              </div>
+              {fbaUpdatedAt && (
+                <div style={{ fontSize:"11px", color:"#9ca3af" }}>
+                  FBA在庫更新日：{fmtDateTime(new Date(fbaUpdatedAt))}
+                </div>
+              )}
+            </div>
           )}
         </div>
       </div>
@@ -737,6 +981,13 @@ export default function InventoryManager() {
 
       {editProduct && (
         <ProductModal product={editProduct} onSave={saveProduct} onClose={() => setEditProduct(null)} />
+      )}
+      {showFbaUpload && (
+        <FbaUploadModal
+          products={products}
+          onUpdate={updateFbaStock}
+          onClose={() => setShowFbaUpload(false)}
+        />
       )}
     </div>
   );
