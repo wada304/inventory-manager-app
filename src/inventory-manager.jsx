@@ -640,10 +640,17 @@ function FbaUploadModal({ products, onUpdate, onClose }) {
     }
     const delimiter = lines[0].includes('\t') ? '\t' : ',';
     const parseRow = (line) => line.split(delimiter).map(c => c.trim().replace(/^"|"$/g, ''));
-    const headers = parseRow(lines[0]).map(h => h.toLowerCase());
+    const headers = parseRow(lines[0]).map(h => h.trim().toLowerCase());
 
     const asinIdx = headers.findIndex(h => h === 'asin');
-    const skuIdx  = headers.findIndex(h => h === 'sku');
+    // seller-sku / 出品者sku / sku の順で探す
+    const skuIdx = (() => {
+      for (const pat of ['seller-sku', '出品者sku', 'sku']) {
+        const idx = headers.findIndex(h => h === pat);
+        if (idx !== -1) return idx;
+      }
+      return -1;
+    })();
     // 「在庫あり」を最優先に、順番通りに探す
     const qtyPriority = ['在庫あり', 'fbaの在庫数', 'afn-fulfillable-quantity', 'fulfillable-quantity', 'fulfillable quantity'];
     let qtyIdx = -1;
@@ -692,7 +699,15 @@ function FbaUploadModal({ products, onUpdate, onClose }) {
       }
     }
     if (updates.length > 0) onUpdate(updates, new Date().toISOString());
-    setResult({ updates, skipped, csvRows, detectedCols: { asinIdx, skuIdx, qtyIdx, qtyColName: headers[qtyIdx] } });
+    setResult({
+      updates, skipped, csvRows,
+      detectedCols: {
+        asinCol:  asinIdx !== -1 ? `[${asinIdx}] "${headers[asinIdx]}"` : '未検出',
+        skuCol:   skuIdx  !== -1 ? `[${skuIdx}]  "${headers[skuIdx]}"` : '未検出',
+        qtyCol:   qtyIdx  !== -1 ? `[${qtyIdx}]  "${headers[qtyIdx]}"` : '未検出',
+        allHeaders: headers.map((h, i) => `[${i}] ${h}`).join(' / '),
+      },
+    });
   };
 
   const handleFile = (file) => {
@@ -843,65 +858,71 @@ function FbaUploadModal({ products, onUpdate, onClose }) {
                   cursor:"pointer", userSelect:"none", padding:"8px 0" }}>
                   🔍 照合デバッグ情報（クリックで展開）
                 </summary>
-                <div style={{ marginTop:"10px", display:"grid", gridTemplateColumns:"1fr 1fr", gap:"12px" }}>
-                  {/* ツール登録製品 */}
-                  <div>
-                    <div style={{ fontSize:"11px", fontWeight:"700", color:"#374151", marginBottom:"6px" }}>
-                      ツール登録製品（{products.length}件）
-                    </div>
-                    <div style={{ background:"#f9fafb", border:"1px solid #e5e7eb", borderRadius:"6px",
-                      padding:"8px", maxHeight:"200px", overflowY:"auto", fontSize:"11px",
-                      fontFamily:"monospace" }}>
-                      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:"4px",
-                        color:"#9ca3af", fontWeight:"600", marginBottom:"4px",
-                        paddingBottom:"4px", borderBottom:"1px solid #e5e7eb" }}>
-                        <span>ASIN</span><span>SKU</span>
+                <div style={{ marginTop:"8px", display:"flex", flexDirection:"column", gap:"10px" }}>
+                  {/* 検出列名 */}
+                  {result.detectedCols && (
+                    <div style={{ background:"#fefce8", border:"1px solid #fde047", borderRadius:"6px",
+                      padding:"10px 12px", fontSize:"11px", fontFamily:"monospace" }}>
+                      <div style={{ fontWeight:"700", color:"#713f12", marginBottom:"6px" }}>検出した列</div>
+                      <div>ASIN列: <span style={{ color:"#1d4ed8" }}>{result.detectedCols.asinCol}</span></div>
+                      <div>SKU列 : <span style={{ color:"#1d4ed8" }}>{result.detectedCols.skuCol}</span></div>
+                      <div>在庫列: <span style={{ color:"#1d4ed8" }}>{result.detectedCols.qtyCol}</span></div>
+                      <div style={{ marginTop:"6px", color:"#78716c", wordBreak:"break-all" }}>
+                        全列: {result.detectedCols.allHeaders}
                       </div>
-                      {products.map(p => (
-                        <div key={p.id} style={{ display:"grid", gridTemplateColumns:"1fr 1fr",
-                          gap:"4px", padding:"2px 0", borderBottom:"1px solid #f3f4f6",
-                          color: p.asin || p.sku ? "#111827" : "#d1d5db" }}>
-                          <span style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}
-                            title={p.asin}>{p.asin || '—'}</span>
-                          <span style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}
-                            title={p.sku}>{p.sku || '—'}</span>
+                    </div>
+                  )}
+                  <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:"12px" }}>
+                    {/* ツール登録製品 — 引用符付きで空白を可視化 */}
+                    <div>
+                      <div style={{ fontSize:"11px", fontWeight:"700", color:"#374151", marginBottom:"6px" }}>
+                        ツール登録製品（{products.length}件）※引用符内が実値
+                      </div>
+                      <div style={{ background:"#f9fafb", border:"1px solid #e5e7eb", borderRadius:"6px",
+                        padding:"8px", maxHeight:"200px", overflowY:"auto", fontSize:"11px",
+                        fontFamily:"monospace" }}>
+                        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:"4px",
+                          color:"#9ca3af", fontWeight:"600", marginBottom:"4px",
+                          paddingBottom:"4px", borderBottom:"1px solid #e5e7eb" }}>
+                          <span>ASIN</span><span>SKU</span>
                         </div>
-                      ))}
-                    </div>
-                  </div>
-                  {/* CSV読み取りデータ */}
-                  <div>
-                    <div style={{ fontSize:"11px", fontWeight:"700", color:"#374151", marginBottom:"6px" }}>
-                      CSV読み取り（{result.csvRows.length}行）
-                      {result.detectedCols && (
-                        <span style={{ color:"#9ca3af", fontWeight:"400", marginLeft:"6px" }}>
-                          在庫列:「{result.detectedCols.qtyColName}」
-                        </span>
-                      )}
-                    </div>
-                    <div style={{ background:"#f9fafb", border:"1px solid #e5e7eb", borderRadius:"6px",
-                      padding:"8px", maxHeight:"200px", overflowY:"auto", fontSize:"11px",
-                      fontFamily:"monospace" }}>
-                      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr auto", gap:"4px",
-                        color:"#9ca3af", fontWeight:"600", marginBottom:"4px",
-                        paddingBottom:"4px", borderBottom:"1px solid #e5e7eb" }}>
-                        <span>ASIN</span><span>SKU</span><span>在庫</span>
-                      </div>
-                      {result.csvRows.map((r, i) => {
-                        const matched = result.updates.some(u => u.asin === r.asin && u.sku === r.sku);
-                        return (
-                          <div key={i} style={{ display:"grid", gridTemplateColumns:"1fr 1fr auto",
+                        {products.map(p => (
+                          <div key={p.id} style={{ display:"grid", gridTemplateColumns:"1fr 1fr",
                             gap:"4px", padding:"2px 0", borderBottom:"1px solid #f3f4f6",
-                            color: matched ? "#15803d" : "#374151",
-                            background: matched ? "#f0fdf4" : "transparent" }}>
-                            <span style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}
-                              title={r.asin}>{r.asin || '—'}</span>
-                            <span style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}
-                              title={r.sku}>{r.sku || '—'}</span>
-                            <span style={{ textAlign:"right" }}>{r.qty}</span>
+                            color: p.asin || p.sku ? "#111827" : "#d1d5db" }}>
+                            <span title={JSON.stringify(p.asin)}>"{p.asin || ''}"</span>
+                            <span title={JSON.stringify(p.sku)}>"{p.sku || ''}"</span>
                           </div>
-                        );
-                      })}
+                        ))}
+                      </div>
+                    </div>
+                    {/* CSV読み取りデータ — 引用符付きで空白を可視化 */}
+                    <div>
+                      <div style={{ fontSize:"11px", fontWeight:"700", color:"#374151", marginBottom:"6px" }}>
+                        CSV読み取り（{result.csvRows.length}行）※引用符内が実値
+                      </div>
+                      <div style={{ background:"#f9fafb", border:"1px solid #e5e7eb", borderRadius:"6px",
+                        padding:"8px", maxHeight:"200px", overflowY:"auto", fontSize:"11px",
+                        fontFamily:"monospace" }}>
+                        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr auto", gap:"4px",
+                          color:"#9ca3af", fontWeight:"600", marginBottom:"4px",
+                          paddingBottom:"4px", borderBottom:"1px solid #e5e7eb" }}>
+                          <span>ASIN</span><span>SKU</span><span>在庫</span>
+                        </div>
+                        {result.csvRows.map((r, i) => {
+                          const matched = result.updates.some(u => u.asin === r.asin && u.sku === r.sku);
+                          return (
+                            <div key={i} style={{ display:"grid", gridTemplateColumns:"1fr 1fr auto",
+                              gap:"4px", padding:"2px 0", borderBottom:"1px solid #f3f4f6",
+                              color: matched ? "#15803d" : "#374151",
+                              background: matched ? "#f0fdf4" : "transparent" }}>
+                              <span title={JSON.stringify(r.asin)}>"{r.asin || ''}"</span>
+                              <span title={JSON.stringify(r.sku)}>"{r.sku || ''}"</span>
+                              <span style={{ textAlign:"right" }}>{r.qty}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
                   </div>
                 </div>
