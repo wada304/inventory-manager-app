@@ -10,7 +10,7 @@ const MONTHS_JP = ["1月","2月","3月","4月","5月","6月","7月","8月","9月
 const STORAGE_KEY = "linowa_inventory_v3";
 const FBA_UPDATED_KEY = "linowa_fba_updated_v1";
 const FONT = "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
-const GRID_COLS = "112px 1fr 130px 88px 170px 105px 105px 76px";
+const GRID_COLS = "112px 1fr 130px 88px 110px 170px 105px 105px 76px";
 const COLOR_AMZ = "#e8622a";
 const COLOR_RAK = "#2a7ae8";
 
@@ -77,6 +77,13 @@ function calcOrderDeadlineDays(p) {
   const avg = totalAvgSales(p);
   if (avg === 0) return null;
   return Math.round(((getEffectiveStock(p) - p.reorderPoint) / avg) * 30 - calcLeadDays(p));
+}
+function calcRecommendedOrder(p) {
+  const avg = totalAvgSales(p);
+  if (avg === 0) return 0;
+  const raw = (avg * 2) - getStock(p.stock) - (p.orderingMfg || 0) - (p.orderingShip || 0);
+  if (raw <= 0) return 0;
+  return Math.ceil(raw / 100) * 100;
 }
 function addDays(base, days) {
   const d = new Date(base); d.setDate(d.getDate() + days); return d;
@@ -426,6 +433,8 @@ function SalesView({ products, onUpdateAnnualSales, now }) {
 function InventoryView({ products, now, onEdit, onDelete, filter, setFilter }) {
   const alerts = products.filter(p => { const l=calcAlertLevel(p); return l==="critical"||l==="warning"; });
   const filtered = filter==="all" ? products : products.filter(p => calcAlertLevel(p)===filter);
+  const orderNeeded = products.filter(p => calcRecommendedOrder(p) > 0)
+    .sort((a, b) => calcRecommendedOrder(b) - calcRecommendedOrder(a));
   const totalStockValue = products.reduce((s,p) => s + getStock(p.stock)*p.unitCost, 0);
   const totalMonthlyAvg = products.reduce((s,p) => s + Math.round(totalAvgSales(p)), 0);
 
@@ -466,6 +475,38 @@ function InventoryView({ products, now, onEdit, onDelete, filter, setFilter }) {
         ))}
       </div>
 
+      {/* 発注サマリー */}
+      {orderNeeded.length > 0 && (
+        <div style={{ background:"#fff7ed", borderBottom:"1px solid #fed7aa", padding:"16px 28px" }}>
+          <div style={{ fontSize:"13px", fontWeight:"700", color:"#c2410c", marginBottom:"12px" }}>
+            📦 発注サマリー — 発注推奨 {orderNeeded.length}件
+          </div>
+          <div style={{ display:"flex", gap:"10px", flexWrap:"wrap" }}>
+            {orderNeeded.map(p => {
+              const rec = calcRecommendedOrder(p);
+              const lv = calcAlertLevel(p);
+              const color = lv==="critical" ? "#dc2626" : lv==="warning" ? "#ea580c" : "#374151";
+              const borderColor = lv==="critical" ? "#fca5a5" : lv==="warning" ? "#fdba74" : "#d1d5db";
+              return (
+                <div key={p.id} style={{ background:"#fff", border:`1px solid ${borderColor}`,
+                  borderLeft:`3px solid ${color}`, borderRadius:"8px", padding:"10px 14px",
+                  minWidth:"160px", maxWidth:"220px" }}>
+                  <div style={{ fontSize:"11px", color:"#6b7280", fontWeight:"500",
+                    overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{p.name}</div>
+                  <div style={{ fontSize:"22px", fontWeight:"700", color, marginTop:"4px", lineHeight:"1.2" }}>
+                    {rec.toLocaleString()}
+                    <span style={{ fontSize:"12px", fontWeight:"400", color:"#9ca3af", marginLeft:"3px" }}>個</span>
+                  </div>
+                  <div style={{ fontSize:"10px", color:"#9ca3af", marginTop:"3px" }}>
+                    月販 {Math.round(totalAvgSales(p))}個 × 2ヶ月基準
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Filter Tabs */}
       <div style={{ padding:"0 28px", display:"flex", gap:"4px",
         borderBottom:"1px solid #e5e7eb", background:"#fff" }}>
@@ -492,6 +533,7 @@ function InventoryView({ products, now, onEdit, onDelete, filter, setFilter }) {
           <div>ステータス</div><div>製品名</div>
           <div style={{ textAlign:"right" }}>在庫数</div>
           <div style={{ textAlign:"right" }}>月販数</div>
+          <div style={{ textAlign:"center" }}>推奨発注数</div>
           <div style={{ textAlign:"center" }}>発注中</div>
           <div style={{ textAlign:"center" }}>発注期限日</div>
           <div style={{ textAlign:"center" }}>入荷予定日</div>
@@ -506,6 +548,7 @@ function InventoryView({ products, now, onEdit, onDelete, filter, setFilter }) {
             const avgRak = Math.round(avgSales(p.monthlySales.楽天市場));
             const avgTotal = avgAmz + avgRak;
             const deadlineDays = calcOrderDeadlineDays(p);
+            const recOrder = calcRecommendedOrder(p);
             const updateInfo = getStockUpdateInfo(p.stockUpdatedAt, now);
             const hasOrdering = (p.orderingMfg||0)+(p.orderingShip||0) > 0;
             const deadlineColor = deadlineDays===null?"#9ca3af":deadlineDays<=0?"#dc2626":deadlineDays<=14?"#ea580c":"#374151";
@@ -564,6 +607,26 @@ function InventoryView({ products, now, onEdit, onDelete, filter, setFilter }) {
                     {avgTotal}<span style={{ fontSize:"11px", fontWeight:"400", color:"#9ca3af", marginLeft:"2px" }}>個</span>
                   </div>
                   <div style={{ fontSize:"10px", color:"#9ca3af", marginTop:"2px" }}>AMZ {avgAmz} / 楽 {avgRak}</div>
+                </div>
+
+                {/* 推奨発注数 */}
+                <div style={{ textAlign:"center" }}>
+                  {recOrder > 0 ? (
+                    <div>
+                      <div style={{ fontSize:"16px", fontWeight:"700",
+                        color: level==="critical" ? "#dc2626" : level==="warning" ? "#ea580c" : "#374151" }}>
+                        {recOrder.toLocaleString()}
+                        <span style={{ fontSize:"11px", fontWeight:"400", color:"#9ca3af", marginLeft:"2px" }}>個</span>
+                      </div>
+                      <div style={{ fontSize:"10px", marginTop:"2px",
+                        color: level==="critical" ? "#dc2626" : level==="warning" ? "#ea580c" : "#9ca3af",
+                        fontWeight:"600" }}>
+                        {level==="critical" ? "🚨 要発注" : level==="warning" ? "⚠️ 要発注" : "発注推奨"}
+                      </div>
+                    </div>
+                  ) : (
+                    <span style={{ fontSize:"12px", color:"#9ca3af" }}>発注不要</span>
+                  )}
                 </div>
 
                 {/* 発注中 */}
