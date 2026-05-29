@@ -61,22 +61,21 @@ function totalAvgSales(product) {
   return avgSales(product.monthlySales.Amazon) + avgSales(product.monthlySales.楽天市場);
 }
 function getStock(s) { return (s.FBA||0) + (s.国内倉庫||0) + (s.楽天ロジ||0); }
-function getEffectiveStock(p) { return getStock(p.stock) + (p.orderingMfg||0) + (p.orderingShip||0); }
 function calcLeadDays(p) { return p.mfgLeadDays + p.shippingDays; }
-function calcAlertLevel(p) {
-  const eff = getEffectiveStock(p), avg = totalAvgSales(p);
-  if (avg === 0) return "none";
-  const dos = Math.round((eff / avg) * 30), lead = calcLeadDays(p);
-  const reorderDays = (p.reorderPoint / avg) * 30 + lead;
-  if (dos <= lead) return "critical";
-  if (dos <= reorderDays) return "warning";
-  if (dos <= reorderDays * 1.3) return "caution";
-  return "ok";
-}
-function calcOrderDeadlineDays(p) {
+function calcDeadlineDays(p) {
   const avg = totalAvgSales(p);
   if (avg === 0) return null;
-  return Math.round(((getEffectiveStock(p) - p.reorderPoint) / avg) * 30 - calcLeadDays(p));
+  return Math.round((getStock(p.stock) / avg) * 30 - calcLeadDays(p));
+}
+function calcAlertLevel(p) {
+  const avg = totalAvgSales(p);
+  if (avg === 0) return "none";
+  const days = calcDeadlineDays(p);
+  if (days === null) return "none";
+  if (days <= 0) return "critical";
+  if (days <= 7) return "warning";
+  if (days <= 14) return "caution";
+  return "ok";
 }
 function calcRecommendedOrder(p) {
   const avg = totalAvgSales(p);
@@ -113,7 +112,7 @@ const ALERT_CONFIG = {
   critical: { label:"今すぐ発注", bg:"#dc2626", icon:"🚨" },
   warning:  { label:"要発注",     bg:"#ea580c", icon:"⚠️" },
   caution:  { label:"注意",       bg:"#ca8a04", icon:"⚡" },
-  ok:       { label:"正常",       bg:"#16a34a", icon:"✓"  },
+  ok:       { label:"正常",       bg:"#16a34a", icon:"✅" },
   none:     { label:"販売なし",   bg:"#9ca3af", icon:"—"  },
 };
 
@@ -189,11 +188,6 @@ function ProductModal({ product, onSave, onClose }) {
   }));
   const set = (k,v) => setForm(f => ({ ...f, [k]:v }));
   const setN = (p,k,v) => setForm(f => ({ ...f, [p]:{ ...f[p], [k]:v } }));
-  const calcSafety = () => {
-    const dailyAvg = totalAvgSales(form) / 30;
-    const lead = (form.mfgLeadDays||0) + (form.shippingDays||0);
-    set("reorderPoint", Math.round(dailyAvg * (lead + (form.bufferDays||0))));
-  };
 
   return (
     <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.45)", backdropFilter:"blur(4px)",
@@ -236,15 +230,6 @@ function ProductModal({ product, onSave, onClose }) {
           <SectionLabel>発注設定</SectionLabel>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:"12px" }}>
             <Field label="発注ロット数"><input type="number" value={form.orderQty} onChange={e => set("orderQty",Number(e.target.value))} /></Field>
-            <Field label="安全在庫数"><input type="number" value={form.reorderPoint} onChange={e => set("reorderPoint",Number(e.target.value))} /></Field>
-            <Field label="予備日数（バッファ）"><input type="number" min="0" value={form.bufferDays} onChange={e => set("bufferDays",Number(e.target.value))} /></Field>
-          </div>
-          <button onClick={calcSafety} style={{ padding:"9px 18px", background:"#eff6ff", border:"1px solid #93c5fd",
-            borderRadius:"8px", color:"#1d4ed8", cursor:"pointer", fontFamily:FONT, fontSize:"13px", fontWeight:"600", alignSelf:"flex-start" }}>
-            ⚙️ 安全在庫を自動計算
-          </button>
-          <div style={{ fontSize:"11px", color:"#9ca3af", marginTop:"-8px" }}>計算式：日次平均販売数 × (リードタイム + 予備日数)</div>
-          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:"12px" }}>
             <Field label="製造リードタイム(日)"><input type="number" value={form.mfgLeadDays} onChange={e => set("mfgLeadDays",Number(e.target.value))} /></Field>
             <Field label="輸送日数(日)"><input type="number" value={form.shippingDays} onChange={e => set("shippingDays",Number(e.target.value))} /></Field>
           </div>
@@ -535,8 +520,8 @@ function InventoryView({ products, now, onEdit, onDelete, filter, setFilter }) {
           <div style={{ textAlign:"right" }}>月販数</div>
           <div style={{ textAlign:"center" }}>推奨発注数</div>
           <div style={{ textAlign:"center" }}>発注中</div>
-          <div style={{ textAlign:"center" }}>発注期限日</div>
-          <div style={{ textAlign:"center" }}>入荷予定日</div>
+          <div style={{ textAlign:"center" }}>発注期限</div>
+          <div style={{ textAlign:"center" }}>在庫切れ予定</div>
           <div />
         </div>
 
@@ -547,13 +532,13 @@ function InventoryView({ products, now, onEdit, onDelete, filter, setFilter }) {
             const avgAmz = Math.round(avgSales(p.monthlySales.Amazon));
             const avgRak = Math.round(avgSales(p.monthlySales.楽天市場));
             const avgTotal = avgAmz + avgRak;
-            const deadlineDays = calcOrderDeadlineDays(p);
+            const deadlineDays = calcDeadlineDays(p);
             const recOrder = calcRecommendedOrder(p);
             const updateInfo = getStockUpdateInfo(p.stockUpdatedAt, now);
             const hasOrdering = (p.orderingMfg||0)+(p.orderingShip||0) > 0;
-            const deadlineColor = deadlineDays===null?"#9ca3af":deadlineDays<=0?"#dc2626":deadlineDays<=14?"#ea580c":"#374151";
-            const deadlineLabel = deadlineDays===null?"—":deadlineDays<=0?"超過":fmtDate(addDays(now,deadlineDays));
-            const arrivalDate = fmtDate(addDays(now, calcLeadDays(p)));
+            const deadlineColor = deadlineDays===null?"#9ca3af":deadlineDays<=0?"#dc2626":deadlineDays<=7?"#ea580c":deadlineDays<=14?"#ca8a04":"#374151";
+            const stockoutDays = avgTotal===0 ? null : Math.round((totalStock / avgTotal) * 30);
+            const stockoutDate = stockoutDays===null ? null : addDays(now, stockoutDays);
             const bg = idx%2===0?"#fff":"#fafafa";
 
             return (
@@ -639,20 +624,34 @@ function InventoryView({ products, now, onEdit, onDelete, filter, setFilter }) {
                   ) : <span style={{ fontSize:"12px", color:"#d1d5db" }}>—</span>}
                 </div>
 
-                {/* 発注期限日 */}
+                {/* 発注期限 */}
                 <div style={{ textAlign:"center" }}>
-                  <span style={{ fontSize:"13px", fontWeight:"700", color:deadlineColor }}>{deadlineLabel}</span>
-                  {deadlineDays!==null && deadlineDays>0 && (
-                    <div style={{ fontSize:"10px", color:"#9ca3af", marginTop:"2px" }}>({deadlineDays}日後)</div>
+                  {deadlineDays === null ? (
+                    <span style={{ fontSize:"12px", color:"#9ca3af" }}>—</span>
+                  ) : (
+                    <div>
+                      <div style={{ fontSize:"13px", fontWeight:"700", color:deadlineColor }}>
+                        {deadlineDays <= 0 ? "超過" : fmtDate(addDays(now, deadlineDays))}
+                      </div>
+                      <div style={{ fontSize:"10px", color:deadlineColor, marginTop:"2px" }}>
+                        {deadlineDays <= 0 ? `${Math.abs(deadlineDays)}日超過` : `残り${deadlineDays}日`}
+                      </div>
+                    </div>
                   )}
                 </div>
 
-                {/* 入荷予定日 */}
+                {/* 在庫切れ予定 */}
                 <div style={{ textAlign:"center" }}>
-                  <span style={{ fontSize:"13px", fontWeight:"600", color:"#374151" }}>
-                    {avgTotal===0 ? "—" : arrivalDate}
-                  </span>
-                  {avgTotal>0 && <div style={{ fontSize:"10px", color:"#9ca3af", marginTop:"2px" }}>({calcLeadDays(p)}日後)</div>}
+                  {stockoutDate === null ? (
+                    <span style={{ fontSize:"12px", color:"#9ca3af" }}>—</span>
+                  ) : (
+                    <div>
+                      <span style={{ fontSize:"13px", fontWeight:"600", color:"#374151" }}>
+                        {fmtDate(stockoutDate)}
+                      </span>
+                      <div style={{ fontSize:"10px", color:"#9ca3af", marginTop:"2px" }}>({stockoutDays}日後)</div>
+                    </div>
+                  )}
                 </div>
 
                 {/* 操作 */}
@@ -678,10 +677,11 @@ function InventoryView({ products, now, onEdit, onDelete, filter, setFilter }) {
       {/* Legend */}
       <div style={{ padding:"14px 28px", borderTop:"1px solid #e5e7eb", display:"flex", gap:"20px",
         fontSize:"11px", color:"#9ca3af", flexWrap:"wrap", background:"#fff" }}>
-        <span style={{ color:"#6b7280", fontWeight:"600" }}>アラート基準（実在庫＋発注中で計算）</span>
-        <span>🚨 今すぐ発注 = 有効在庫日数 ≤ リードタイム</span>
-        <span>⚠️ 要発注 = 有効在庫日数 ≤ リードタイム + 安全在庫日数</span>
-        <span>⚡ 注意 = 上記の1.3倍以内</span>
+        <span style={{ color:"#6b7280", fontWeight:"600" }}>アラート基準（発注期限までの残り日数）</span>
+        <span>🚨 今すぐ発注 = 残り0日以下</span>
+        <span>⚠️ 要発注 = 残り1〜7日</span>
+        <span>⚡ 注意 = 残り8〜14日</span>
+        <span>✅ 正常 = 残り15日以上</span>
         <span>* データはブラウザに保存されます</span>
         <span style={{ marginLeft:"auto", color:"#d1d5db" }}>v1.3.0</span>
       </div>
