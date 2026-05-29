@@ -65,7 +65,8 @@ function calcLeadDays(p) { return p.mfgLeadDays + p.shippingDays; }
 function calcDeadlineDays(p) {
   const avg = totalAvgSales(p);
   if (avg === 0) return null;
-  return Math.round((getStock(p.stock) / avg) * 30 - calcLeadDays(p));
+  const effectiveStock = getStock(p.stock) + (p.orderingMfg || 0) + (p.orderingShip || 0);
+  return Math.round((effectiveStock / avg) * 30 - calcLeadDays(p));
 }
 function calcAlertLevel(p) {
   const avg = totalAvgSales(p);
@@ -537,7 +538,8 @@ function InventoryView({ products, now, onEdit, onDelete, filter, setFilter }) {
             const updateInfo = getStockUpdateInfo(p.stockUpdatedAt, now);
             const hasOrdering = (p.orderingMfg||0)+(p.orderingShip||0) > 0;
             const deadlineColor = deadlineDays===null?"#9ca3af":deadlineDays<=0?"#dc2626":deadlineDays<=7?"#ea580c":deadlineDays<=14?"#ca8a04":"#374151";
-            const stockoutDays = avgTotal===0 ? null : Math.round((totalStock / avgTotal) * 30);
+            const effectiveStock = totalStock + (p.orderingMfg || 0) + (p.orderingShip || 0);
+            const stockoutDays = avgTotal===0 ? null : Math.round((effectiveStock / avgTotal) * 30);
             const stockoutDate = stockoutDays===null ? null : addDays(now, stockoutDays);
             const bg = idx%2===0?"#fff":"#fafafa";
 
