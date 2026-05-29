@@ -81,7 +81,7 @@ function calcOrderDeadlineDays(p) {
 function calcRecommendedOrder(p) {
   const avg = totalAvgSales(p);
   if (avg === 0) return 0;
-  const raw = (avg * 2) - getStock(p.stock) - (p.orderingMfg || 0) - (p.orderingShip || 0);
+  const raw = (avg * 2) - (p.orderingMfg || 0) - (p.orderingShip || 0);
   if (raw <= 0) return 0;
   return Math.ceil(raw / 100) * 100;
 }
